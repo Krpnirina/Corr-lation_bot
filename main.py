@@ -55,7 +55,7 @@ def decide_trade(data_m15, data_m30, data_h1):
 
     print(f"[INFO] Avg tick vol: {avg_tick_vol:.2f}, Avg trans vol: {avg_trans_vol:.2f}, Tick strong? {strong_tick}")
 
-    # Logic trading araka ny fangatahanao:
+    # Logic trading araka ny rules
     if strong_tick and dir_m15 == "bullish":
         return "BUY"
     elif strong_tick and dir_m15 == "bearish":
@@ -69,45 +69,42 @@ def decide_trade(data_m15, data_m30, data_h1):
         return None
 
 def main_loop():
-    print("[BOT] Manomboka 24/24. Manangona data...")
-    start_time = datetime.now()
-
-    data_collection = []
-
+    print("[BOT] ✅ Manomboka amin'ny mode automatique. Miandry angona mandritra ny 1 ora...")
+    
     while True:
-        now = datetime.now()
-        elapsed = (now - start_time).total_seconds()
+        start_time = datetime.now()
+        data_collection = []
 
-        # Maka data simulation amin'ny timeframes
-        data_m15 = fetch_mock_data("M15")
-        data_m30 = fetch_mock_data("M30")
-        data_h1 = fetch_mock_data("H1")
+        while True:
+            now = datetime.now()
+            elapsed = (now - start_time).total_seconds()
 
-        data_collection.append((data_m15, data_m30, data_h1))
+            data_m15 = fetch_mock_data("M15")
+            data_m30 = fetch_mock_data("M30")
+            data_h1 = fetch_mock_data("H1")
 
-        print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] Nanangona data faha-{len(data_collection)} (Elapsed: {int(elapsed)} segondra)")
+            data_collection.append((data_m15, data_m30, data_h1))
 
-        # Raha mbola tsy feno 1h ny data dia mitohy manangona fotsiny
-        if elapsed < DURATION_SECONDS:
-            print("[INFO] Tsy mbola feno 1 ora ny fanangonana data, mbola miandry...")
-            time.sleep(1)
-            continue
+            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] ✅ Nanangona data faha-{len(data_collection)} (Elapsed: {int(elapsed)}s)")
 
-        # Raha feno 1 ora, manomboka analyse isaky ny segondra rehefa misy data vaovao
-        decision = decide_trade(data_m15, data_m30, data_h1)
+            if elapsed < DURATION_SECONDS:
+                print("[INFO] ⏳ Mbola tsy feno 1 ora...")
+                time.sleep(1)
+                continue
+            else:
+                break  # tapitra ny fanangonana, miakatra mankany amin'ny fanapahan-kevitra
+
+        # Maka ny data farany hanapahana hevitra
+        latest_data = data_collection[-1]
+        decision = decide_trade(*latest_data)
 
         if decision:
-            print(f"[TRADE] Manao {decision} amin'ny vola: {TRADE_AMOUNT} amin'ny asset {TRADE_ASSET}")
-            # Eto no atao ny placement automatique raha misy API
-            # Raha tsy izany dia simulation fotsiny
+            print(f"[TRADE] 📢 Manao {decision} amin'ny vola {TRADE_AMOUNT} amin'ny asset {TRADE_ASSET}")
+            # API trade call eto raha tena mi-trade
         else:
-            print("[TRADE] Tsy manao position amin'izao fotoana izao.")
+            print("[TRADE] ⛔ Tsy misy position apetraka.")
 
-        # Reset start_time ho an'ny cycle manaraka
-        start_time = datetime.now()
-        data_collection.clear()
-
-        print("[BOT] Manomboka fanangonana vaovao manaraka...")
+        print("[BOT] 🔁 Mamerina cycle fanangonana vaovao...\n")
         time.sleep(1)
 
 if __name__ == "__main__":
