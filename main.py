@@ -1,111 +1,119 @@
-import time
+import asyncio
+import websockets
+import json
+import os
 from datetime import datetime, timedelta
-import random
 
-# --- Configuration ---
-TRADE_ASSET = "XAUUSD_OTC"
-DURATION_SECONDS = 3600  # 1 ora = 3600 segondra
-VOLUME_THRESHOLD = 1.5
-TRADE_AMOUNT = 1.0
+# --- CONFIGURATION ---
+TOKEN = os.getenv("DERIV_TOKEN") or "REzKac9b5BR7DmF"
+APP_ID = 71130
+SYMBOL = "R_100"
+INITIAL_STAKE = 0.35
+TRADE_DURATION = 3  # in minutes
+VOLUME_THRESHOLD = 7  # number of ticks to consider strong volume
+CANDLE_GRANULARITY = 300  # 5 minutes
 
-# --- Simulation data fetch ---
-def fetch_mock_data(timeframe):
-    """
-    Mamerina OHLC, tick_volume, transaction_volume amin'ny fomba simulation.
-    Afaka ovaina amin'ny fakana données tena izy raha misy API.
-    """
-    open_price = round(random.uniform(1930, 1950), 2)
-    close_price = round(open_price + random.uniform(-5, 5), 2)
-    tick_volume = random.randint(1000, 7000)
-    transaction_volume = random.randint(500, 4000)
-    return {
-        'open': open_price,
-        'close': close_price,
-        'tick_volume': tick_volume,
-        'transaction_volume': transaction_volume
-    }
+# --- UTILS ---
+def is_bearish(candle):
+    return candle['open'] > candle['close']
 
-def candle_direction(open_p, close_p):
-    if close_p > open_p:
-        return "bullish"
-    elif close_p < open_p:
-        return "bearish"
-    else:
-        return "neutral"
+def is_bullish(candle):
+    return candle['close'] > candle['open']
 
-def is_tick_strong(tick_vol, trans_vol):
-    if trans_vol == 0:
-        return False
-    return (tick_vol / trans_vol) >= VOLUME_THRESHOLD
+# --- MAIN FUNCTION ---
+async def run_bot():
+    url = f"wss://ws.derivws.com/websockets/v3?app_id={APP_ID}"
+    async with websockets.connect(url) as ws:
+        print("🔌 Connecting to Deriv WebSocket...")
 
-def decide_trade(data_m15, data_m30, data_h1):
-    dir_m15 = candle_direction(data_m15['open'], data_m15['close'])
-    dir_m30 = candle_direction(data_m30['open'], data_m30['close'])
-    dir_h1 = candle_direction(data_h1['open'], data_h1['close'])
+        await ws.send(json.dumps({
+            "authorize": TOKEN
+        }))
+        auth_response = json.loads(await ws.recv())
+        if auth_response.get("error"):
+            print(f"❌ Authorization error: {auth_response['error']['message']}")
+            return
+        print("✅ Authorized")
 
-    print(f"[INFO] Directions M15: {dir_m15}, M30: {dir_m30}, H1: {dir_h1}")
+        # Fetch 1 candle of 5-minute timeframe
+        await ws.send(json.dumps({
+            "ticks_history": SYMBOL,
+            "adjust_start_time": 1,
+            "count": 1,
+            "end": "latest",
+            "granularity": CANDLE_GRANULARITY
+        }))
+        ohlc_response = json.loads(await ws.recv())
+        try:
+            prices = ohlc_response['history']['prices']
+            times = ohlc_response['history']['times']
+        except KeyError:
+            print(f"❌ Error fetching OHLC: {ohlc_response}")
+            return
 
-    if not (dir_m15 == dir_m30 == dir_h1):
-        print("[INFO] Directions tsy mitovy, tsy manao trade.")
-        return None
+        candle = {
+            "open": prices[0],
+            "close": prices[-1],
+        }
 
-    avg_tick_vol = (data_m15['tick_volume'] + data_m30['tick_volume'] + data_h1['tick_volume']) / 3
-    avg_trans_vol = (data_m15['transaction_volume'] + data_m30['transaction_volume'] + data_h1['transaction_volume']) / 3
-    strong_tick = is_tick_strong(avg_tick_vol, avg_trans_vol)
+        # Collect last 10 ticks
+        await ws.send(json.dumps({
+            "ticks": SYMBOL,
+            "subscribe": 1
+        }))
 
-    print(f"[INFO] Avg tick vol: {avg_tick_vol:.2f}, Avg trans vol: {avg_trans_vol:.2f}, Tick strong? {strong_tick}")
+        ticks = []
+        print(f"📥 Subscribed to tick data for {SYMBOL}")
+        while len(ticks) < 10:
+            tick_msg = json.loads(await ws.recv())
+            if tick_msg['msg_type'] == "tick":
+                tick = tick_msg['tick']['quote']
+                ticks.append(tick)
+                print(f"📊 Tick: {tick}")
 
-    # Logic trading araka ny rules
-    if strong_tick and dir_m15 == "bullish":
-        return "BUY"
-    elif strong_tick and dir_m15 == "bearish":
-        return "SELL"
-    elif not strong_tick and dir_m15 == "bearish":
-        return "BUY"
-    elif not strong_tick and dir_m15 == "bullish":
-        return "SELL"
-    else:
-        print("[INFO] Tsy misy conditions feno.")
-        return None
+        # Unsubscribe from tick stream
+        await ws.send(json.dumps({"forget_all": "ticks"}))
 
-def main_loop():
-    print("[BOT] ✅ Manomboka amin'ny mode automatique. Miandry angona mandritra ny 1 ora...")
-    
-    while True:
-        start_time = datetime.now()
-        data_collection = []
+        # Decision logic
+        volume_strength = len(ticks)
+        direction = None
 
-        while True:
-            now = datetime.now()
-            elapsed = (now - start_time).total_seconds()
-
-            data_m15 = fetch_mock_data("M15")
-            data_m30 = fetch_mock_data("M30")
-            data_h1 = fetch_mock_data("H1")
-
-            data_collection.append((data_m15, data_m30, data_h1))
-
-            print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] ✅ Nanangona data faha-{len(data_collection)} (Elapsed: {int(elapsed)}s)")
-
-            if elapsed < DURATION_SECONDS:
-                print("[INFO] ⏳ Mbola tsy feno 1 ora...")
-                time.sleep(1)
-                continue
+        if is_bearish(candle):
+            if volume_strength > VOLUME_THRESHOLD:
+                direction = "SELL"
             else:
-                break  # tapitra ny fanangonana, miakatra mankany amin'ny fanapahan-kevitra
+                direction = "BUY"
+        elif is_bullish(candle):
+            if volume_strength > VOLUME_THRESHOLD:
+                direction = "BUY"
+            else:
+                direction = "SELL"
 
-        # Maka ny data farany hanapahana hevitra
-        latest_data = data_collection[-1]
-        decision = decide_trade(*latest_data)
+        if direction:
+            print(f"🧠 Candle analysis: {'Bearish' if is_bearish(candle) else 'Bullish'}")
+            print(f"📈 Volume strength: {volume_strength}")
+            print(f"🟢 Placing trade: {direction}")
 
-        if decision:
-            print(f"[TRADE] 📢 Manao {decision} amin'ny vola {TRADE_AMOUNT} amin'ny asset {TRADE_ASSET}")
-            # API trade call eto raha tena mi-trade
+            await ws.send(json.dumps({
+                "buy": 1,
+                "price": INITIAL_STAKE,
+                "parameters": {
+                    "amount": INITIAL_STAKE,
+                    "basis": "stake",
+                    "contract_type": "CALL" if direction == "BUY" else "PUT",
+                    "currency": "USD",
+                    "duration": TRADE_DURATION,
+                    "duration_unit": "m",
+                    "symbol": SYMBOL
+                }
+            }))
+            response = json.loads(await ws.recv())
+            if response.get("error"):
+                print(f"❌ Trade error: {response['error']['message']}")
+            else:
+                print(f"✅ Trade placed: {response['buy']['contract_id']}")
         else:
-            print("[TRADE] ⛔ Tsy misy position apetraka.")
+            print("⚠️ No clear signal to trade.")
 
-        print("[BOT] 🔁 Mamerina cycle fanangonana vaovao...\n")
-        time.sleep(1)
-
-if __name__ == "__main__":
-    main_loop()
+# --- EXECUTE ---
+asyncio.run(run_bot())
